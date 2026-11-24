@@ -329,6 +329,40 @@ svg {
   flex-direction: column;
   gap: 5px;
 }
+.space-nav {
+  position: relative;
+}
+.space-nav[draggable="true"] {
+  cursor: grab;
+}
+.space-nav.is-space-dragging {
+  opacity: 0.4;
+  cursor: grabbing;
+}
+.space-sort-grip {
+  flex-shrink: 0;
+  opacity: 0.3;
+}
+.space-nav:hover .space-sort-grip {
+  opacity: 0.8;
+}
+.space-insert-before::before,
+.space-insert-after::after {
+  content: "";
+  position: absolute;
+  left: 5px;
+  right: 5px;
+  height: 2px;
+  background: #ee6a92;
+  border-radius: 2px;
+  pointer-events: none;
+}
+.space-insert-before::before {
+  top: 0;
+}
+.space-insert-after::after {
+  bottom: 0;
+}
 
 .space-nav.space-drop-ready {
   min-height: 54px;

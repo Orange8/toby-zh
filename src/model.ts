@@ -37,6 +37,7 @@ export type Command =
   | { type: "createSpace"; name: string; color: Color }
   | { type: "updateSpace"; id: string; name: string; color?: Color }
   | { type: "deleteSpace"; id: string }
+  | { type: "reorderSpace"; id: string; beforeId?: string }
   | { type: "createCollection"; spaceId: string; name: string; color: Color }
   | {
       type: "updateCollection";
@@ -243,6 +244,17 @@ export function applyCommand(current: AppData, command: Command): AppData {
       const space = getSpace(command.id);
       space.name = name(command.name);
       if (command.color !== undefined) space.color = color(command.color);
+      break;
+    }
+    case "reorderSpace": {
+      const space = getSpace(command.id);
+      if (command.beforeId === space.id) break;
+      if (command.beforeId !== undefined) getSpace(command.beforeId);
+      data.spaces = data.spaces.filter((item) => item.id !== space.id);
+      const index = data.spaces.findIndex(
+        (item) => item.id === command.beforeId,
+      );
+      data.spaces.splice(index < 0 ? data.spaces.length : index, 0, space);
       break;
     }
     case "deleteSpace": {

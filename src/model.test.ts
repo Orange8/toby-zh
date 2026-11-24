@@ -46,6 +46,47 @@ function fixture(): AppData {
 }
 
 describe("persistent collection operations", () => {
+  it("reorders spaces without changing their contents and preserves order in backups", () => {
+    const current = fixture();
+    current.spaces.push(
+      { id: "s2", name: "学习", color: "blue", createdAt: 2 },
+      { id: "s3", name: "阅读", color: "green", createdAt: 3 },
+    );
+    const moved = applyCommand(current, { type: "reorderSpace", id: "s" });
+    assert.deepEqual(
+      moved.spaces.map((s) => s.id),
+      ["s2", "s3", "s"],
+    );
+    assert.deepEqual(moved.collections, current.collections);
+    assert.deepEqual(moved.links, current.links);
+    assert.deepEqual(parseBackup(moved).spaces, moved.spaces);
+    const first = applyCommand(moved, {
+      type: "reorderSpace",
+      id: "s",
+      beforeId: "s2",
+    });
+    assert.deepEqual(first.spaces, current.spaces);
+    assert.deepEqual(
+      current.spaces.map((s) => s.id),
+      ["s", "s2", "s3"],
+    );
+    assert.deepEqual(
+      applyCommand(first, { type: "reorderSpace", id: "s", beforeId: "s" })
+        .spaces,
+      first.spaces,
+    );
+    assert.throws(() =>
+      applyCommand(first, { type: "reorderSpace", id: "missing" }),
+    );
+    assert.throws(() =>
+      applyCommand(first, {
+        type: "reorderSpace",
+        id: "s",
+        beforeId: "missing",
+      }),
+    );
+  });
+
   it("migrates version 1 into a stable default space, preserving all collection IDs and URLs", () => {
     const current = fixture();
     const legacy = {

@@ -65,6 +65,22 @@ export function Dialog({
   onClose: () => void;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const pressedBackdrop = useRef(false);
+  function isBackdrop(event: {
+    target: EventTarget;
+    clientX: number;
+    clientY: number;
+  }) {
+    const dialog = ref.current;
+    if (!dialog || event.target !== dialog) return false;
+    const bounds = dialog.getBoundingClientRect();
+    return (
+      event.clientX < bounds.left ||
+      event.clientX > bounds.right ||
+      event.clientY < bounds.top ||
+      event.clientY > bounds.bottom
+    );
+  }
   useEffect(() => {
     const dialog = ref.current!;
     dialog.showModal();
@@ -77,8 +93,19 @@ export function Dialog({
         e.preventDefault();
         onClose();
       }}
+      onPointerDown={(e) => {
+        pressedBackdrop.current =
+          e.isPrimary && e.button === 0 && isBackdrop(e);
+      }}
+      onPointerCancel={() => {
+        pressedBackdrop.current = false;
+      }}
       onClick={(e) => {
-        if (e.target === ref.current) onClose();
+        // Selecting text can start inside the form and end on the backdrop;
+        // Chrome then targets the click at their common ancestor (the dialog).
+        const startedOutside = pressedBackdrop.current;
+        pressedBackdrop.current = false;
+        if (startedOutside && isBackdrop(e)) onClose();
       }}
       aria-labelledby="dialog-title"
     >

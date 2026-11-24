@@ -119,12 +119,42 @@ test("real MV3 extension: new-tab override, persistence, safe save/close, drag, 
     await expect(card.getByRole("link")).toHaveCount(2);
 
     // Drag the pinned tab into a collection: saving it is allowed, closing it is not.
+    await worker.evaluate(
+      `globalThis.__tobyOriginalSet = chrome.storage.local.set; chrome.storage.local.set = async () => { throw new Error('模拟拖拽保存失败'); };`,
+    );
+    await page.locator(".open-tab").dragTo(card);
+    await expect(page.getByRole("alert")).toContainText("模拟拖拽保存失败");
+    await expect(page.locator(".open-tab")).toHaveCount(1);
+    await expect(card.getByRole("link")).toHaveCount(2);
+    expect(pinned.isClosed()).toBe(false);
+    await worker.evaluate(
+      `chrome.storage.local.set = globalThis.__tobyOriginalSet; delete globalThis.__tobyOriginalSet;`,
+    );
     await page.locator(".open-tab").dragTo(card);
     await expect(card.getByRole("link")).toHaveCount(3);
+    await expect(page.locator(".open-tab")).toHaveCount(0);
     expect(pinned.isClosed()).toBe(false);
+    await page.reload();
+    await expect(page.locator(".open-tab")).toHaveCount(0);
 
     const other = await context.newPage();
     await other.goto(url);
+    await expect(other.locator(".open-tab")).toHaveCount(0);
+    // Navigation makes the tab visible again; a duplicate save also hides it.
+    await pinned.goto("https://toby-test.example/pinned-updated");
+    await expect(page.locator(".open-tab")).toHaveCount(1);
+    await pinned.goto("https://toby-test.example/pinned");
+    await expect(page.locator(".open-tab")).toHaveCount(1);
+    await page.bringToFront();
+    await page.locator(".open-tab").dragTo(card);
+    await expect(page.locator(".open-tab")).toHaveCount(0);
+    await expect(other.locator(".open-tab")).toHaveCount(0);
+    await expect(card.getByRole("link")).toHaveCount(3);
+    expect(pinned.isClosed()).toBe(false);
+    const reopened = await context.newPage();
+    await reopened.goto("https://toby-test.example/pinned");
+    await expect(page.locator(".open-tab")).toHaveCount(1);
+    await reopened.close();
     // Two pages modify the same document concurrently through the worker queue.
     await Promise.all(
       [page, other].map((p, i) =>
@@ -152,16 +182,22 @@ test("real MV3 extension: new-tab override, persistence, safe save/close, drag, 
     );
     await page.bringToFront();
     await card.getByRole("button", { name: "打开全部" }).click();
+    await expect(page.locator(".toast")).toContainText(
+      "已在新窗口打开 3 个链接",
+    );
     const restoredTabs = () =>
       page.evaluate(
         async (ids) =>
-          (await chrome.tabs.query({})).filter(
-            (t) =>
-              !ids.includes(t.id!) &&
-              t.url?.startsWith("https://toby-test.example/"),
-          ),
+          (await chrome.tabs.query({}))
+            .map((tab) => ({ ...tab, url: tab.pendingUrl || tab.url }))
+            .filter(
+              (t) =>
+                !ids.includes(t.id!) &&
+                t.url?.startsWith("https://toby-test.example/"),
+            ),
         beforeIds,
       );
+    // Chrome may defer navigation in background tabs; their requested URL is pendingUrl.
     await expect.poll(async () => (await restoredTabs()).length).toBe(3);
     const restored = await restoredTabs();
     expect(new Set(restored.map((t) => t.windowId)).size).toBe(1);

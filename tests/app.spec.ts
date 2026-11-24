@@ -21,16 +21,12 @@ test("collection drag preview supports inserting after the last group and cancel
     await page.getByRole("button", { name: "创建合集", exact: true }).click();
     await page.getByRole("dialog").waitFor({ state: "hidden" });
   }
-  const source = page
-    .locator(".collection-card")
-    .filter({
-      has: page.getByRole("heading", { name: "工作现场", exact: true }),
-    });
-  const target = page
-    .locator(".collection-card")
-    .filter({
-      has: page.getByRole("heading", { name: "开始探索", exact: true }),
-    });
+  const source = page.locator(".collection-card").filter({
+    has: page.getByRole("heading", { name: "工作现场", exact: true }),
+  });
+  const target = page.locator(".collection-card").filter({
+    has: page.getByRole("heading", { name: "开始探索", exact: true }),
+  });
   await target.locator(".card-title").hover();
   await source.locator(".card-title").hover();
   const start = await source.locator(".card-title").boundingBox();
@@ -84,6 +80,53 @@ test("collection drag preview supports inserting after the last group and cancel
     "开始探索",
     "工作现场",
   ]);
+});
+
+test("editing a link keeps the dialog open when text selection ends outside it", async ({
+  page,
+}) => {
+  await page.goto("/newtab.html");
+  await page
+    .getByRole("button", { name: "编辑 MDN Web Docs", exact: true })
+    .click();
+  const dialog = page.getByRole("dialog");
+  const title = page.getByLabel("标题");
+  await title.fill("正在修改的标签标题");
+  const input = (await title.boundingBox())!;
+  const box = (await dialog.boundingBox())!;
+  await page.mouse.move(input.x + input.width / 2, input.y + input.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x - 35, input.y + input.height / 2, { steps: 8 });
+  await page.mouse.up();
+  await expect(dialog).toBeVisible();
+  await expect(title).toHaveValue("正在修改的标签标题");
+
+  // The dialog element's own border is inside the dialog, not the backdrop.
+  await page.mouse.click(box.x + 1, box.y + box.height / 2);
+  await expect(dialog).toBeVisible();
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(
+    page.getByRole("link", { name: "正在修改的标签标题" }),
+  ).toBeVisible();
+
+  // Deliberate backdrop clicks, Escape, Cancel and the close button still work.
+  const open = () =>
+    page
+      .getByRole("button", { name: "编辑 正在修改的标签标题", exact: true })
+      .click();
+  await open();
+  await page.mouse.click(box.x - 35, box.y + box.height / 2);
+  await expect(dialog).toHaveCount(0);
+  await open();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await open();
+  await page.getByRole("button", { name: "取消", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await open();
+  await page.getByRole("button", { name: "关闭对话框", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
 });
 
 test("website logos render, failed icons fall back, and edited URLs retry the correct site", async ({
@@ -218,6 +261,83 @@ test("click titles to rename with Enter, blur, Escape, IME and save failure hand
   await expect(
     page.getByRole("heading", { name: "待重试的名称", exact: true }),
   ).toBeVisible();
+});
+
+test("spaces drag before or after each other, persist order across pages and cancel safely", async ({
+  page,
+  context,
+}) => {
+  await page.goto("/newtab.html");
+  for (const name of ["工作空间", "阅读空间"]) {
+    await page.getByRole("button", { name: "创建空间", exact: true }).click();
+    await page.getByLabel("空间名称").fill(name);
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: "创建空间", exact: true })
+      .click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+  }
+  const spaces = page.locator(".space-nav");
+  const labels = page.locator(".space-nav-label > .truncate");
+  const original = ["我的第一个空间", "工作空间", "阅读空间"];
+  await spaces.first().click();
+  const other = await context.newPage();
+  await other.goto("/newtab.html");
+  await expect(other.locator(".space-nav")).toHaveCount(3);
+  await spaces.first().hover();
+  const start = (await spaces.first().boundingBox())!;
+  await page.mouse.down();
+  await page.mouse.move(
+    start.x + start.width / 2 + 12,
+    start.y + start.height / 2,
+    { steps: 4 },
+  );
+  await expect(spaces.first()).toHaveClass(/is-space-dragging/);
+  const end = (await spaces.last().boundingBox())!;
+  await page.mouse.move(end.x + 60, end.y + end.height - 4, { steps: 8 });
+  await page.mouse.move(end.x + 61, end.y + end.height - 4);
+  await expect(spaces.last()).toHaveClass(/space-insert-after/);
+  await page.mouse.up();
+  const reordered = ["工作空间", "阅读空间", "我的第一个空间"];
+  await expect(labels).toHaveText(reordered);
+  await expect(other.locator(".space-nav-label > .truncate")).toHaveText(
+    reordered,
+  );
+  await expect(
+    page.getByRole("heading", { name: "我的第一个空间", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "开始探索", exact: true }),
+  ).toBeVisible();
+  await page.reload();
+  await expect(labels).toHaveText(reordered);
+  await expect(
+    page.getByRole("heading", { name: "我的第一个空间", exact: true }),
+  ).toBeVisible();
+  await spaces
+    .last()
+    .dragTo(spaces.first(), { targetPosition: { x: 60, y: 3 } });
+  await expect(labels).toHaveText(original);
+  await spaces.first().hover();
+  const cancel = (await spaces.first().boundingBox())!;
+  await page.mouse.down();
+  await page.mouse.move(
+    cancel.x + cancel.width / 2 + 12,
+    cancel.y + cancel.height / 2,
+    { steps: 4 },
+  );
+  await expect(spaces.first()).toHaveClass(/is-space-dragging/);
+  await page.keyboard.press("Escape");
+  await page.mouse.up();
+  await expect(
+    page.locator(
+      ".is-space-dragging, .space-insert-before, .space-insert-after",
+    ),
+  ).toHaveCount(0);
+  await expect(labels).toHaveText(original);
+  await spaces.first().dragTo(page.locator(".collection-card").first());
+  await expect(labels).toHaveText(original);
+  await expect(page.getByRole("alert")).toHaveCount(0);
 });
 
 test("spaces isolate collections, persist selection, support collapse, moves and deletion undo", async ({

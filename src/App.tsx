@@ -47,6 +47,7 @@ import {
 } from "./model";
 import {
   closeSavedTabs,
+  hideSavedTab,
   isExtension,
   mutate,
   observeTabs,
@@ -71,7 +72,7 @@ type Modal =
   | { type: "settings" }
   | { type: "import"; data: AppData };
 type Notice = { text: string; error?: boolean; undo?: Command };
-type DragItem = { type: "link" | "tab" | "collection"; id: string };
+type DragItem = { type: "link" | "tab" | "collection" | "space"; id: string };
 
 export function App() {
   const [data, setData] = useState<AppData>();
@@ -93,6 +94,11 @@ export function App() {
   const [dragOver, setDragOver] = useState<string>();
   const [draggingCollectionId, setDraggingCollectionId] = useState<string>();
   const [spaceDragOver, setSpaceDragOver] = useState<string>();
+  const [draggingSpaceId, setDraggingSpaceId] = useState<string>();
+  const [spaceDrop, setSpaceDrop] = useState<{
+    id: string;
+    edge: "before" | "after";
+  }>();
   const [collectionDrop, setCollectionDrop] = useState<{
     id: string;
     edge: "before" | "after";
@@ -474,6 +480,8 @@ export function App() {
     setDragOver(undefined);
     setDraggingCollectionId(undefined);
     setSpaceDragOver(undefined);
+    setDraggingSpaceId(undefined);
+    setSpaceDrop(undefined);
     collectionDropRef.current = undefined;
     setCollectionDrop(undefined);
   }
@@ -484,6 +492,8 @@ export function App() {
       return;
     }
     dragItem.current = item;
+    setDraggingSpaceId(item.type === "space" ? item.id : undefined);
+    setSpaceDrop(undefined);
     if (item.type === "collection") {
       dragPosition.current = {
         x: Math.max(8, Math.min(event.clientX + 18, innerWidth - 284)),
@@ -504,6 +514,10 @@ export function App() {
   function overCollection(event: DragEvent, collection: Collection) {
     const item = dragItem.current;
     if (!item) return;
+    if (item.type === "space") {
+      event.dataTransfer.dropEffect = "none";
+      return;
+    }
     if (item.type !== "collection") {
       event.preventDefault();
       setDragOver(collection.id);
@@ -542,7 +556,7 @@ export function App() {
     const item = dragItem.current;
     const placement = collectionDropRef.current;
     clearDrag();
-    if (!item) return;
+    if (!item || item.type === "space") return;
     void task(async () => {
       if (item.type === "collection") {
         if (sort !== "manual")
@@ -576,6 +590,15 @@ export function App() {
           type: "addLinks",
           collectionId,
           links: [tab],
+        });
+        await hideSavedTab(tab);
+        setTabs((current) =>
+          current.filter((t) => t.id !== tab.id || t.url !== tab.url),
+        );
+        setSelected((current) => {
+          const next = new Set(current);
+          next.delete(tab.id);
+          return next;
         });
         setNotice({
           text:
@@ -722,7 +745,13 @@ export function App() {
         </div>
         <div className="nav-caption">
           空间
-          <span>{draggedCollection ? "拖到其他空间" : data.spaces.length}</span>
+          <span>
+            {draggingSpaceId
+              ? "拖动调整顺序"
+              : draggedCollection
+                ? "拖到其他空间"
+                : data.spaces.length}
+          </span>
         </div>
         <button
           className={`nav-item ${activeFilter === "starred" ? "active" : ""}`}
@@ -747,8 +776,13 @@ export function App() {
             return (
               <button
                 key={space.id}
-                className={`nav-item space-nav ${activeFilter === space.id ? "active" : ""} ${canReceive ? "space-drop-ready" : ""} ${hovering ? "space-drop-hover" : ""}`}
+                className={`nav-item space-nav ${activeFilter === space.id ? "active" : ""} ${canReceive ? "space-drop-ready" : ""} ${hovering ? "space-drop-hover" : ""} ${draggingSpaceId === space.id ? "is-space-dragging" : ""} ${spaceDrop?.id === space.id ? `space-insert-${spaceDrop.edge}` : ""}`}
                 aria-current={activeFilter === space.id ? "page" : undefined}
+                draggable={!busy && data.spaces.length > 1}
+                title="拖动调整空间顺序"
+                onDragStart={(e) =>
+                  startDrag(e, { type: "space", id: space.id })
+                }
                 onClick={() => selectSpace(space.id)}
                 onDragEnter={(e) => {
                   if (canReceive) {
@@ -757,6 +791,26 @@ export function App() {
                   }
                 }}
                 onDragOver={(e) => {
+                  if (dragItem.current?.type === "space") {
+                    if (dragItem.current.id === space.id) {
+                      setSpaceDrop(undefined);
+                      e.dataTransfer.dropEffect = "none";
+                      return;
+                    }
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = "move";
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    const edge =
+                      e.clientY < rect.top + rect.height / 2
+                        ? "before"
+                        : "after";
+                    setSpaceDrop((old) =>
+                      old?.id === space.id && old.edge === edge
+                        ? old
+                        : { id: space.id, edge },
+                    );
+                    return;
+                  }
                   if (canReceive && dragItem.current?.type === "collection") {
                     e.preventDefault();
                     e.dataTransfer.dropEffect = "move";
@@ -772,6 +826,9 @@ export function App() {
                   if (
                     !e.currentTarget.contains(e.relatedTarget as Node | null)
                   ) {
+                    setSpaceDrop((current) =>
+                      current?.id === space.id ? undefined : current,
+                    );
                     setSpaceDragOver((current) =>
                       current === space.id ? undefined : current,
                     );
@@ -781,7 +838,26 @@ export function App() {
                   e.preventDefault();
                   e.stopPropagation();
                   const item = dragItem.current;
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const after = e.clientY >= rect.top + rect.height / 2;
                   clearDrag();
+                  if (item?.type === "space" && item.id !== space.id) {
+                    const siblings = data.spaces.filter(
+                      (s) => s.id !== item.id,
+                    );
+                    const index = siblings.findIndex((s) => s.id === space.id);
+                    if (activeFilter) {
+                      setFilter(activeFilter);
+                      localStorage.setItem("toby-active-space", activeFilter);
+                    }
+                    void task(async () => {
+                      await commit({
+                        type: "reorderSpace",
+                        id: item.id,
+                        beforeId: after ? siblings[index + 1]?.id : space.id,
+                      });
+                    });
+                  }
                   if (item?.type === "collection" && canReceive)
                     void task(async () => {
                       await commit({
@@ -804,6 +880,13 @@ export function App() {
                     </span>
                   )}
                 </span>
+                {!canReceive && data.spaces.length > 1 && (
+                  <GripVertical
+                    className="space-sort-grip"
+                    size={13}
+                    aria-hidden="true"
+                  />
+                )}
                 {canReceive ? (
                   <span className="space-drop-icon" aria-hidden="true">
                     <ArrowDownToLine size={16} />
